@@ -1,6 +1,6 @@
 # Waveshare-ePaper-10.85 Dashboard
 
-A fully automated E-ink dashboard running on a Raspberry Pi Zero 2W. Designed for large Waveshare e-Paper displays (e.g., 10.85"), this project aggregates essential daily information and smart home status into a clean, minimalist interface.
+A fully functional E-ink dashboard running on a Raspberry Pi Zero 2W. Designed for large Waveshare e-Paper displays (e.g., 10.85"), this project aggregates essential daily information and smart home status into a clean, minimalist interface.
 
 ## Key Features
 
