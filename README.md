@@ -10,7 +10,7 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 2W. Designed f
 * **Roborock Vacuum:** Live battery level, current status, and tracking for cleaned area during active cleaning.
 * **Spotify:** Displays the currently playing track and artist.
 * **Gmail:** Tracks the number of unread emails in your primary inbox.
-* **System Fallbacks:** Automatically switches to displaying System Load (CPU/RAM usage) or Cryptocurrency prices (BTC/ETH) if certain hardware integrations are disabled or offline for demonstration of dashboard capabilities.
+* **System Fallbacks:** Automatically switches to displaying System Load (CPU/RAM usage) or Cryptocurrency prices (BTC/ETH) if certain hardware integrations are disabled or offline for demonstration of dashboard capabilities. The fallback wedgets are not required tokens and ready to go.
 * **Optimized Rendering:** Uses partial screen refreshes to prevent flickering, with scheduled full refreshes to clear e-ink ghosting.
 
 <img width="2400" height="1792" alt="dashboard_primary" src="https://github.com/user-attachments/assets/20be2eae-4a06-48e2-9ad4-efcba00dcb7f" />
@@ -63,7 +63,7 @@ All widget toggles and API configurations are located at the top of the `main.py
 4. Enter the 6-digit code in the terminal. The script will securely save your session data locally.
 
 ### Bambu Lab 3D Printer
-You DON'T need to enable "LAN Mode" on your Bambu Lab printer to access local data.
+**You DON'T need to enable "LAN Mode" on your Bambu Lab printer to access local data.**
 1. On your printer's screen, go to **Settings -> Network**.
 2. Note your printer's **IP Address**, **Serial Number**, and **Access Code**. (Force on your router to map exact IP address)
 3. Update the `PRINTER_CONF` dictionary in the script with these local credentials.
@@ -73,6 +73,7 @@ Since the official Spotify API requires running a local web server for complex t
 1. Connect your Spotify account to Last.fm.
 2. Create a Last.fm API account to generate an **API Key**.
 3. Update `LASTFM_CONF` in the script with your API Key and Last.fm Username.
+** After configuration, you don't need to use last.fm service, Payed last.fm account is not required. You can coutinue use only spotify service **
 
 ### Gmail
 1. Go to the Google Cloud Console.
