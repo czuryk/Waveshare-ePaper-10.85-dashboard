@@ -213,10 +213,14 @@ data_store = DataStore()
 
 
 # --- HELPERS ---
-def check_socket_connection(ip, port, timeout=2):
+def ping_printer(ip):
     try:
-        with socket.create_connection((ip, port), timeout=timeout):
-            return True
+        result = subprocess.run(
+            ['ping', '-c', '1', '-W', '1', ip],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        return result.returncode == 0
     except:
         return False
 
@@ -523,7 +527,7 @@ def update_data_thread():
         if ENABLE_BAMBU:
             update_interval = 5 if is_connected else 15
             if now - data_store.last_update['printer'] > update_interval:
-                is_alive = check_socket_connection(PRINTER_CONF['IP'], 8883, timeout=2)
+                is_alive = ping_printer(PRINTER_CONF['IP'])
                 if is_alive:
                     try:
                         if not is_connected and global_printer:
@@ -1094,4 +1098,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
 
