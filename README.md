@@ -33,11 +33,15 @@ Go to Interfacing Options -> SPI -> Enable.
 
 Update your system and install necessary system-level dependencies, including `tmux` for keeping the script running in the background:
 `sudo apt update`
-`sudo apt install python3-pip python3-pil python3-numpy git tmux -y`
+`sudo apt install python3-pip python3-pil python3-numpy git tmux swig liblgpio-dev python3-dev -y`
+
+*Note: `swig`, `liblgpio-dev` and `python3-dev` are build dependencies for the `lgpio` Python package (used as the GPIO backend); without them `pip install lgpio` fails to compile.*
 
 ### 2. Python Dependencies
-Install the required standard Python packages:
-`pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock`
+Install the required standard Python packages (this also includes `spidev`, `gpiozero` and `lgpio`, which are needed to drive the e-ink display over SPI/GPIO):
+`pip3 install --resume-retries 10 requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock spidev gpiozero lgpio`
+
+*Tip: `--resume-retries 10` lets pip resume interrupted downloads, which helps a lot on unstable or restricted networks (e.g. in mainland China).*
 
 *Note: `bambulabs_api` library already included in this package.*
 
