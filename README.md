@@ -33,11 +33,15 @@ Go to Interfacing Options -> SPI -> Enable.
 
 Update your system and install necessary system-level dependencies, including `tmux` for keeping the script running in the background:
 `sudo apt update`
-`sudo apt install python3-pip python3-pil python3-numpy git tmux -y`
+`sudo apt install python3-pip python3-pil python3-numpy git tmux swig liblgpio-dev python3-dev -y`
+
+*Note: `swig`, `liblgpio-dev` and `python3-dev` are build dependencies for the `lgpio` Python package (used as the GPIO backend); without them `pip install lgpio` fails to compile.*
 
 ### 2. Python Dependencies
-Install the required standard Python packages:
-`pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock`
+Install the required standard Python packages (this also includes `spidev`, `gpiozero` and `lgpio`, which are needed to drive the e-ink display over SPI/GPIO):
+`pip3 install --resume-retries 10 requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock spidev gpiozero lgpio`
+
+*Tip: `--resume-retries 10` lets pip resume interrupted downloads, which helps a lot on unstable or restricted networks (e.g. in mainland China).*
 
 *Note: `bambulabs_api` library already included in this package.*
 
@@ -50,7 +54,46 @@ The **patched** version of the epd10in85 library with fixed partial refresh issu
 
 All widget toggles and API configurations are located at the top of the `main.py` script. You can enable or disable specific widgets using the `ENABLE_*` boolean variables.
 
+### Localization (Region / City / AQI)
+
+Geographic and air-quality settings live in the `LOCALIZATION` block at the top of `main.py`.
+
+**Region preset** — one switch sets sensible defaults:
+```python
+REGION = 'China'   # 'China' | 'Global'
+```
+- `China`  -> city **Shanghai**, AQI standard **china** (HJ 633-2012)
+- `Global` -> city **Belgrade**, AQI standard **european** (EAQI)
+
+**City** — pick any city from the `CITIES` table, or add your own with its latitude/longitude. Leave `CITY = None` to follow the region preset:
+```python
+CITY = 'Beijing'   # or None to use the region default
+```
+Both the weather and AQI widgets use this single coordinate.
+
+**AQI standard** — choose how air quality is scored. Leave `AQI_STANDARD = None` to follow the region preset:
+```python
+AQI_STANDARD = 'china'   # 'china' | 'european' | 'us'
+```
+- `china`    — China AQI (HJ 633-2012), computed locally from pollutant concentrations (PM2.5/PM10/SO2/NO2/O3/CO) provided by Open-Meteo.
+- `european` — European AQI (EAQI), taken directly from Open-Meteo.
+- `us`       — US AQI, taken directly from Open-Meteo.
+
+The on-screen AQI number inverts (white-on-black) once air quality starts to degrade; the inversion threshold adapts to the chosen scale automatically (EAQI ~50, China/US ~150).
+
+**Cryptocurrency source** — the BTC/ETH fallback widget can pull prices from either provider:
+```python
+CRYPTO_SOURCE = 'binance'   # 'binance' | 'coingecko'
+```
+- `binance`   — Binance public market data; reachable from mainland China.
+- `coingecko` — CoinGecko (original source); use this in regions where Binance is restricted.
+
 ### Claude Code
+
+The Claude widget runs in one of two modes, set by `CLAUDE_MOCK` at the top of `main.py`:
+- `CLAUDE_MOCK = True` — shows **simulated** usage data for demo purposes; no Claude account, OAuth, or network calls required.
+- `CLAUDE_MOCK = False` — shows your **real** Claude Code usage via OAuth. Authenticate with the steps below:
+
 1. Run the `main.py` script from the terminal for the first time.
 2. The script will pause, ask for your to copy the authorization URL and paste it on real browser.
 3. Open that URL in your browser, click "Authorize", and you will be redirected to a dead `localhost` page.

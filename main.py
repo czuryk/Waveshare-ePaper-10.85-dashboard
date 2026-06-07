@@ -16,6 +16,7 @@ import asyncio
 import pickle
 import subprocess
 import math
+import random
 import calendar
 import urllib.parse
 from collections import deque
@@ -49,8 +50,27 @@ ENABLE_STRAVA = False
 ENABLE_BAMBU = False
 ENABLE_ROBOROCK = False
 ENABLE_ANTIGRAVITY = False
-ENABLE_CLAUDE = False
+ENABLE_CLAUDE = True
+# CLAUDE_MOCK: True = built-in simulated demo usage (no Claude account/OAuth needed);
+#             False = real Claude Code usage via OAuth (see claude.py and README).
+CLAUDE_MOCK = True
 ENABLE_SPOTIFY = False
+
+# --- Cryptocurrency price source ---
+# 'binance'   = Binance public market data (reachable from mainland China)
+# 'coingecko' = CoinGecko (global, original author's source)
+CRYPTO_SOURCE = 'binance'
+
+_CRYPTO_SOURCES = {
+    'binance': {
+        'btc': 'https://data-api.binance.vision/api/v3/klines?symbol=BTCUSDT&interval=2h&limit=84',
+        'eth': 'https://data-api.binance.vision/api/v3/klines?symbol=ETHUSDT&interval=2h&limit=84',
+    },
+    'coingecko': {
+        'btc': 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart?vs_currency=usd&days=7',
+        'eth': 'https://api.coingecko.com/api/v3/coins/ethereum/market_chart?vs_currency=usd&days=7',
+    },
+}
 
 # --- API ENDPOINTS ---
 API_ENDPOINTS = {
@@ -59,15 +79,44 @@ API_ENDPOINTS = {
     'strava_token': 'https://www.strava.com/oauth/token',
     'strava_auth': 'https://www.strava.com/oauth/authorize',
     'strava_activities': 'https://www.strava.com/api/v3/athlete/activities',
-    'btc': 'https://api.coingecko.com/api/v3/coins/bitcoin/market_chart',
-    'eth': 'https://api.coingecko.com/api/v3/coins/ethereum/market_chart',
+    'btc': _CRYPTO_SOURCES[CRYPTO_SOURCE]['btc'],
+    'eth': _CRYPTO_SOURCES[CRYPTO_SOURCE]['eth'],
     'lastfm': 'http://ws.audioscrobbler.com/2.0/'
 }
 
-# --- CONFIGURATION ---
-# Change to your GEO location
-LOCATION_LAT = 44.8240855
-LOCATION_LON = 20.4934273
+# ===================== LOCALIZATION =====================
+# Region preset (one-line switch). Fine-grained overrides below win when set.
+REGION = 'China'                 # 'China' | 'Global'
+
+CITIES = {
+    # China
+    'Shanghai': (31.2304, 121.4737), 'Beijing': (39.9042, 116.4074),
+    'Shenzhen': (22.5431, 114.0579), 'Hangzhou': (30.2741, 120.1551),
+    'Guangzhou': (23.1291, 113.2644),
+    # International
+    'Belgrade': (44.8240, 20.4934), 'London': (51.5074, -0.1278),
+    'New York': (40.7128, -74.0060), 'Tokyo': (35.6762, 139.6503),
+}
+
+# AQI standard: 'china' = HJ633-2012 (computed locally), 'european' = EAQI, 'us' = USAQI
+_REGION_PRESETS = {
+    'China':  {'aqi_standard': 'china',    'city': 'Shanghai'},
+    'Global': {'aqi_standard': 'european', 'city': 'Belgrade'},
+}
+
+# Overrides: set a value to override the region preset, or leave None to follow it.
+CITY = None                      # e.g. 'Beijing'
+AQI_STANDARD = None              # 'china' | 'european' | 'us'
+
+# AQI value at which the on-screen number inverts (white-on-black = air getting worse).
+# EAQI is ~0-100; China/US AQI are 0-500, so thresholds differ per scale.
+_AQI_INVERT = {'china': 150, 'us': 150, 'european': 50}
+
+_preset = _REGION_PRESETS[REGION]
+CITY = CITY or _preset['city']
+AQI_STANDARD = AQI_STANDARD or _preset['aqi_standard']
+LOCATION_LAT, LOCATION_LON = CITIES[CITY]
+# =======================================================
 
 PRINTER_CONF = {
     'IP': '192.168....',
@@ -97,8 +146,11 @@ GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 if os.path.exists(LIB_DIR):
     sys.path.append(LIB_DIR)
 
+# core display driver: must succeed (no longer silently swallowed)
+from waveshare_epd import epd10in85
+
+# optional SDKs: missing is fine, widgets stay disabled
 try:
-    from waveshare_epd import epd10in85
     import bambulabs_api as bl
     from roborock.web_api import RoborockApiClient
     from roborock.devices.device_manager import create_device_manager, UserParams
@@ -249,6 +301,42 @@ def get_cached_icon(name, size, is_white=False):
     return icon_cache.get(key)
 
 
+def compute_china_aqi(cur):
+    """China AQI (HJ 633-2012) from open-meteo pollutant concentrations.
+    Returns (aqi:int, dominant:str). Real-time hourly values as approximation
+    (PM uses 24h breakpoints; SO2/NO2/O3/CO use 1h breakpoints)."""
+    IAQI = [0, 50, 100, 150, 200, 300, 400, 500]
+    BP = {
+        'pm2_5': [0, 35, 75, 115, 150, 250, 350, 500],
+        'pm10':  [0, 50, 150, 250, 350, 420, 500, 600],
+        'sulphur_dioxide':  [0, 150, 500, 650, 800, 1600, 2100, 2620],
+        'nitrogen_dioxide': [0, 100, 200, 700, 1200, 2340, 3090, 3840],
+        'ozone':            [0, 160, 200, 300, 400, 800, 1000, 1200],
+        'carbon_monoxide':  [0, 5, 10, 35, 60, 90, 120, 150],
+    }
+    def _iaqi(c, bp):
+        if c is None:
+            return None
+        if c > bp[-1]:
+            return 500
+        for i in range(len(bp) - 1):
+            if bp[i] <= c <= bp[i + 1]:
+                return (IAQI[i+1]-IAQI[i])/(bp[i+1]-bp[i])*(c-bp[i])+IAQI[i]
+        return None
+    scores = {}
+    for k, bp in BP.items():
+        c = cur.get(k)
+        if k == 'carbon_monoxide' and c is not None:
+            c = c / 1000.0
+        v = _iaqi(c, bp)
+        if v is not None:
+            scores[k] = v
+    if not scores:
+        return 0, ''
+    dominant = max(scores, key=lambda k: scores[k])
+    return int(round(scores[dominant])), dominant
+
+
 def time_until(iso_str):
     if not iso_str: return "N/A"
     try:
@@ -273,6 +361,9 @@ def time_until(iso_str):
 def auth_claude():
     global ENABLE_CLAUDE
     if not ENABLE_CLAUDE: return
+    if CLAUDE_MOCK:
+        # mock mode: built-in simulated usage, no OAuth/network needed
+        return
     try:
         import claude
         success = claude.interactive_auth()
@@ -282,6 +373,31 @@ def auth_claude():
     except ImportError:
         print("claude.py not found. Claude widget disabled.")
         ENABLE_CLAUDE = False
+
+
+def simulate_claude_usage():
+    # 1-hour window; value ramps from a random start (10-20%) to a random end
+    # (50-90%). start/end are deterministic per window (seeded by window index),
+    # so the value only moves smoothly upward within the hour, then resets.
+    now = time.time()
+    WIN = 3600
+    win_idx = int(now // WIN)
+    progress = (now % WIN) / WIN
+    def gen(seed_off):
+        rng = random.Random(win_idx * 1000 + seed_off)
+        start = rng.uniform(10, 20)
+        end = rng.uniform(50, 90)
+        return int(round(start + (end - start) * progress))
+    # 5h window resets on a 5-hour boundary, 7d window on a 7-day boundary (distinct)
+    FIVE_H = 5 * 3600
+    SEVEN_D = 7 * 86400
+    resets_5h = datetime.fromtimestamp((int(now // FIVE_H) + 1) * FIVE_H, tz=timezone.utc).isoformat()
+    resets_7d = datetime.fromtimestamp((int(now // SEVEN_D) + 1) * SEVEN_D, tz=timezone.utc).isoformat()
+    return {
+        'error': False,
+        'five_hour': {'utilization': gen(1), 'resets_at': resets_5h},
+        'seven_day': {'utilization': gen(2), 'resets_at': resets_7d},
+    }
 
 
 def auth_antigravity():
@@ -548,12 +664,25 @@ def update_data_thread():
 
         if now - data_store.last_update['weather'] > 600:
             weather_url = f"{API_ENDPOINTS['weather']}?latitude={LOCATION_LAT}&longitude={LOCATION_LON}&current=temperature_2m,relative_humidity_2m,surface_pressure,wind_speed_10m,wind_direction_10m,weather_code,is_day,uv_index&hourly=temperature_2m,precipitation_probability,weather_code,cloud_cover&timezone=auto&forecast_days=2"
-            aqi_url = f"{API_ENDPOINTS['aqi']}?latitude={LOCATION_LAT}&longitude={LOCATION_LON}&current=european_aqi&timezone=auto"
+            if AQI_STANDARD == 'china':
+                _aqi_fields = 'pm2_5,pm10,sulphur_dioxide,nitrogen_dioxide,ozone,carbon_monoxide'
+            elif AQI_STANDARD == 'us':
+                _aqi_fields = 'us_aqi'
+            else:
+                _aqi_fields = 'european_aqi'
+            aqi_url = f"{API_ENDPOINTS['aqi']}?latitude={LOCATION_LAT}&longitude={LOCATION_LON}&current={_aqi_fields}&timezone=auto"
             w_data = net.get_json(weather_url)
             a_data = net.get_json(aqi_url)
             with data_store.lock:
                 if w_data: data_store.weather = w_data
-                if a_data and 'current' in a_data: data_store.aqi = a_data['current'].get('european_aqi', 0)
+                if a_data and 'current' in a_data:
+                    _cur = a_data['current']
+                    if AQI_STANDARD == 'china':
+                        data_store.aqi = compute_china_aqi(_cur)[0]
+                    elif AQI_STANDARD == 'us':
+                        data_store.aqi = _cur.get('us_aqi', 0)
+                    else:
+                        data_store.aqi = _cur.get('european_aqi', 0)
             data_store.last_update['weather'] = now
 
         if ENABLE_STRAVA:
@@ -618,21 +747,23 @@ def update_data_thread():
                 data_store.last_update['printer'] = now
         else:
             if now - data_store.last_update['crypto'] > 600:
-                btc_url = f"{API_ENDPOINTS['btc']}?vs_currency=usd&days=7"
-                eth_url = f"{API_ENDPOINTS['eth']}?vs_currency=usd&days=7"
-                btc_data = net.get_json(btc_url)
-                eth_data = net.get_json(eth_url)
+                btc_data = net.get_json(API_ENDPOINTS['btc'])
+                eth_data = net.get_json(API_ENDPOINTS['eth'])
+                def _crypto_prices(d):
+                    if not d:
+                        return []
+                    if CRYPTO_SOURCE == 'coingecko':
+                        return [pt[1] for pt in d.get('prices', [])]
+                    return [float(k[4]) for k in d]   # binance klines: close price
                 with data_store.lock:
-                    if btc_data:
-                        prices = [p[1] for p in btc_data.get('prices', [])]
-                        if prices:
-                            data_store.crypto['btc'] = int(prices[-1])
-                            data_store.crypto['btc_hist'] = prices[::len(prices) // 50][:50]
-                    if eth_data:
-                        prices = [p[1] for p in eth_data.get('prices', [])]
-                        if prices:
-                            data_store.crypto['eth'] = int(prices[-1])
-                            data_store.crypto['eth_hist'] = prices[::len(prices) // 50][:50]
+                    btc_p = _crypto_prices(btc_data)
+                    if btc_p:
+                        data_store.crypto['btc'] = int(btc_p[-1])
+                        data_store.crypto['btc_hist'] = btc_p[::max(1, len(btc_p) // 50)][:50]
+                    eth_p = _crypto_prices(eth_data)
+                    if eth_p:
+                        data_store.crypto['eth'] = int(eth_p[-1])
+                        data_store.crypto['eth_hist'] = eth_p[::max(1, len(eth_p) // 50)][:50]
                 data_store.last_update['crypto'] = now
 
         if not ENABLE_ROBOROCK and not ENABLE_ANTIGRAVITY:
@@ -663,8 +794,12 @@ def update_data_thread():
                 pass
             data_store.last_update['gmail'] = now
 
-        # Claude Data Fetching (Run external script every 10 min)
-        if ENABLE_CLAUDE and now - data_store.last_update['claude'] > 600:
+        # Claude usage: mock = built-in simulation; real = external claude.py every 10 min
+        if ENABLE_CLAUDE and CLAUDE_MOCK:
+            with data_store.lock:
+                data_store.claude = simulate_claude_usage()
+            data_store.last_update['claude'] = now
+        elif ENABLE_CLAUDE and now - data_store.last_update['claude'] > 600:
             try:
                 subprocess.run([sys.executable, os.path.join(BASE_DIR, 'claude.py')], capture_output=True, timeout=30)
                 usage_path = os.path.join(BASE_DIR, 'usage.json')
@@ -937,6 +1072,14 @@ def render_screen(epd, fonts):
         temp_rounded = math.floor(temp + 0.5)
 
         draw_icon(draw, col2_x, 20, get_weather_icon(w_code, is_day), (90, 90))
+        # City label centered under the weather icon — at-a-glance location for multi-region
+        _city_label = CITY.upper()
+        try:
+            _bb = draw.textbbox((0, 0), _city_label, font=fonts['20'])
+            _cw = _bb[2] - _bb[0]
+        except AttributeError:
+            _cw = draw.textsize(_city_label, font=fonts['20'])[0]
+        draw.text((col2_x + 45 - _cw // 2, 114), _city_label, font=fonts['20'], fill=0)
         draw.text((col2_x + 100, 10), f"{temp_rounded}°C", font=fonts['80'], fill=0)
 
         uv_x, uv_y = col2_x + 320, 25
@@ -957,8 +1100,8 @@ def render_screen(epd, fonts):
         else:
             draw.text((uv_val_x, uv_val_y), uv_val_str, font=fonts['60'], fill=0)
 
-        draw.text((col2_x + 100, 95), f"Humidity: {hum}%", font=fonts['20'], fill=0)
-        draw.text((col2_x + 100, 120), f"Press: {pres} hPa", font=fonts['20'], fill=0)
+        draw.text((col2_x + 135, 95), f"Humidity: {hum}%", font=fonts['20'], fill=0)
+        draw.text((col2_x + 135, 120), f"Press: {pres} hPa", font=fonts['20'], fill=0)
 
         draw.line((col2_x, 140, col2_x + col_w - 40, 140), fill=0, width=2)
 
@@ -1013,7 +1156,7 @@ def render_screen(epd, fonts):
 
         val_x, val_y = aqi_x + 80, y_c2 + 66
 
-        if aqi >= 50:
+        if aqi >= _AQI_INVERT.get(AQI_STANDARD, 50):
             pad = 20
             draw.rectangle((val_x - pad, val_y - pad + 15, val_x + tw + pad, val_y + th + pad - 5), fill=0)
             draw.text((val_x, val_y), aqi_str, font=fonts['80'], fill=255)
