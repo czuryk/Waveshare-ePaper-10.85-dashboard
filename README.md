@@ -24,22 +24,26 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Desi
 ## Prerequisites & Installation
 
 ### Hardware
-* [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)
+* [Raspberry Pi Zero 1W](https://www.raspberrypi.com/products/raspberry-pi-zero-w/) OR [Raspberry Pi Zero 2W](https://www.raspberrypi.com/products/raspberry-pi-zero-2-w/)
 * [Waveshare E-Ink Display 10.85"](https://www.waveshare.com/10.85inch-e-paper-hat-plus.htm?sku=29790)
 
 ### 1. System Setup
 Enable the SPI interface on your Raspberry Pi, which is required for communicating with the e-ink display:
-`sudo raspi-config`
+```shell
+sudo raspi-config
+```
 Go to Interfacing Options -> SPI -> Enable.
 
 Update your system and install necessary system-level dependencies, including `tmux` for keeping the script running in the background:
-`sudo apt update`
-`sudo apt install python3-pip python3-pil python3-numpy git tmux -y`
+```shell
+sudo apt update
+sudo apt install python3-pip python3-pil python3-numpy git tmux -y
+```
 
 ### 2. Python Dependencies
 Install the required standard Python packages:
 ```shell
-`pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock paho-mqtt gpiozero lgpio spidev`
+pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock paho-mqtt gpiozero lgpio spidev
 ```
 
 **Notes:**
