@@ -3,7 +3,7 @@
 A fully functional E-ink dashboard running on a Raspberry Pi Zero 1W or 2W. Designed for large Waveshare e-Paper displays (e.g., 10.85"), this project aggregates essential daily information and smart home status into a clean, minimalist interface.
 
 ## Key Features
-* **Now supporting both Raspberry Pi Zero 1 & 2!**
+* **(NEW!) Now supporting both Raspberry Pi Zero 1 & 2!**
 * **(NEW!) Codex usage data:** Displays usage data for Codex, showing the limit, and limit reset time.
 * **Antigravity usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.
 * **Claude Code usage data:** Displays usage data for Claude Code, showing the daily limit, weekly limit, and limit reset time.
