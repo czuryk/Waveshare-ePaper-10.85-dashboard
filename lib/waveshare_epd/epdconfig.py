@@ -60,9 +60,17 @@ class RaspberryPi:
         # self.GPIO_CS_M_PIN     = gpiozero.LED(self.CS_M_PIN)
         # self.GPIO_CS_M_PIN     = gpiozero.LED(self.CS_M_PIN)
         self.GPIO_PWR_PIN    = gpiozero.LED(self.PWR_PIN)
-        self.GPIO_BUSY_PIN   = gpiozero.Button(self.BUSY_PIN, pull_up = False)
+        # Plain polled level input. Button would enable edge detection we do not
+        # need (BUSY is polled in ReadBusy); on a single-core Pi Zero 1 those
+        # edge events pile up in the lgpio notify queue and make .value lag,
+        # which hangs ReadBusy waiting for a BUSY release that already happened.
+        self.GPIO_BUSY_PIN   = gpiozero.DigitalInputDevice(self.BUSY_PIN, pull_up = False)
+        # SPI is opened once and kept open; module_init() may be called many
+        # times (we re-init the panel before every partial update), and
+        # re-opening an already-open spidev leaks file descriptors.
+        self._spi_opened = False
 
-        
+
 
     def digital_write(self, pin, value):
         if pin == self.RST_PIN:
@@ -122,15 +130,19 @@ class RaspberryPi:
 
     def module_init(self, cleanup=False):
         self.GPIO_PWR_PIN.on()
-        
-        # SPI device, bus = 0, device = 0
-        self.SPI_M.open(0, 0)
-        self.SPI_M.max_speed_hz = 4000000
-        self.SPI_M.mode = 0b00
 
-        self.SPI_S.open(0, 1)
-        self.SPI_S.max_speed_hz = 4000000
-        self.SPI_S.mode = 0b00
+        # Open SPI only once, even across repeated init/init_Part calls.
+        if not self._spi_opened:
+            # SPI device, bus = 0, device = 0
+            self.SPI_M.open(0, 0)
+            self.SPI_M.max_speed_hz = 4000000
+            self.SPI_M.mode = 0b00
+
+            self.SPI_S.open(0, 1)
+            self.SPI_S.max_speed_hz = 4000000
+            self.SPI_S.mode = 0b00
+
+            self._spi_opened = True
 
         return 0
 
@@ -138,6 +150,7 @@ class RaspberryPi:
         logger.debug("spi end")
         self.SPI_M.close()
         self.SPI_S.close()
+        self._spi_opened = False
 
         self.GPIO_RST_PIN.off()
         self.GPIO_DC_PIN.off()
