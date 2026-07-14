@@ -4,7 +4,8 @@ A fully functional E-ink dashboard running on a Raspberry Pi Zero 2W. Designed f
 
 ## Key Features
 
-* **(NEW!) Antigravity usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.
+* **(NEW!) Codex usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.
+* **Antigravity usage data:** Displays usage data for Antigravity, showing the limit, and limit reset time.
 * **Claude Code usage data:** Displays usage data for Claude Code, showing the daily limit, weekly limit, and limit reset time.
 * **Weather & Air Quality:** Real-time temperature, humidity, wind direction/speed, UV index, 4-hour forecast, and AQI (with visual inversion for high pollution levels) using the Open-Meteo API.
 * **Strava Integration:** Displays total and yearly activity statistics (distance and ride counts), including specific breakdowns for biking and hiking.
@@ -43,12 +44,21 @@ Install the required standard Python packages:
 
 ### 3. Display Library
 The **patched** version of the epd10in85 library with fixed partial refresh issue already included in this package.
+**New** Included support of Raspberry PI Zero 1
 
 ---
 
 ## Configuration & Widget Setup
 
 All widget toggles and API configurations are located at the top of the `main.py` script. You can enable or disable specific widgets using the `ENABLE_*` boolean variables.
+
+### Codex (ChatGPT)
+1. Codex limits are read from the official OpenAI Codex CLI tokens — unlike Claude, the dashboard does not run its own browser login flow.
+2. Install the Codex CLI (for example `npm install -g @openai/codex`) and run codex login in the terminal.
+3. A browser window opens — sign in with your ChatGPT account and click "Authorize". (Codex usage limits require a paid ChatGPT plan that includes Codex.)
+4. After a successful login the CLI writes your tokens to `~/.codex/auth.json` (on Windows: `%USERPROFILE%\.codex\auth.json`).
+5. Copy that file into the project root, next to `codex.py`, keeping the exact name `auth.json`.
+6. Set `ENABLE_CODEX = True` in `main.py` and run the script. The dashboard reads `auth.json`, fetches your usage, and from then on refreshes and rotates the tokens automatically, updating auth.json in place.
 
 ### Claude Code
 1. Run the `main.py` script from the terminal for the first time.
@@ -57,7 +67,7 @@ All widget toggles and API configurations are located at the top of the `main.py
 7. Copy the whole URL containing `code=...` portion from your browser's address bar and paste it back into the terminal. The script will automatically fetch and save the required tokens to `claude_creds.json`.
 
 ### Strava
-1. Go to your Strava API Settings and create an API Application.
+1. Go to your Strava API Settings and create an API Application. **Now only payed accounts supported**
 2. Note down your **Client ID** and **Client Secret**.
 3. Run the `main.py` script from the terminal for the first time.
 4. The script will pause, ask for your ID/Secret, and print an authorization URL in the console. 
