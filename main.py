@@ -42,13 +42,12 @@ FONT_DIR = os.path.join(BASE_DIR, 'fnt')
 ICON_DIR = os.path.join(BASE_DIR, 'icons')
 LOG_FILE = os.path.join(BASE_DIR, 'dashboard.log')
 
-# ######################
 # --- WIDGET TOGGLES ---
-# ######################
-ENABLE_STRAVA = False
+ENABLE_STRAVA = False # For payed tier only
 ENABLE_BAMBU = False
 ENABLE_ROBOROCK = False
 ENABLE_ANTIGRAVITY = False
+ENABLE_CODEX = False
 ENABLE_CLAUDE = False
 ENABLE_SPOTIFY = False
 
@@ -65,23 +64,22 @@ API_ENDPOINTS = {
 }
 
 # --- CONFIGURATION ---
-# Change to your GEO location
-LOCATION_LAT = 44.8240855
-LOCATION_LON = 20.4934273
+LOCATION_LAT = 44.8140857
+LOCATION_LON = 20.3934271
 
 PRINTER_CONF = {
     'IP': '192.168....',
-    'SERIAL': '',
-    'ACCESS_CODE': ''
+    'SERIAL': '....',
+    'ACCESS_CODE': '....'
 }
 
 ROBOROCK_CONF = {
-    'EMAIL': 'email...'
+    'EMAIL': 'your@email.com'
 }
 
 LASTFM_CONF = {
-    'API_KEY': '',
-    'USERNAME': ''
+    'API_KEY': '...',
+    'USERNAME': 'your_name'
 }
 
 STRAVA_CONF = {
@@ -96,6 +94,26 @@ GMAIL_SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
 
 if os.path.exists(LIB_DIR):
     sys.path.append(LIB_DIR)
+
+# --- GPIO PIN FACTORY ---
+# Prefer the lgpio backend: the native/sysfs factory is broken on Raspberry Pi
+# OS Bookworm (kernel 6.x) and fails to export the pins. If lgpio is not
+# available (older OS images), fall back to gpiozero's default instead of
+# hard-crashing on import.
+#
+# On import, lgpio creates its ".lgd-nfy*" notification pipe in the current
+# working directory. Import from /tmp so it never depends on the permissions
+# or location of the project directory, then restore the working directory.
+_prev_cwd = os.getcwd()
+try:
+    os.chdir('/tmp')
+    from gpiozero import Device
+    from gpiozero.pins.lgpio import LGPIOFactory
+    Device.pin_factory = LGPIOFactory()
+except Exception as _e:
+    print(f"lgpio pin factory unavailable ({_e}); using gpiozero default")
+finally:
+    os.chdir(_prev_cwd)
 
 try:
     from waveshare_epd import epd10in85
@@ -123,6 +141,22 @@ file_handler.setFormatter(formatter)
 logger.handlers.clear()
 logger.addHandler(console_handler)
 logger.addHandler(file_handler)
+
+# --- DRIVER DEBUG ---
+# Set True to log every stage of the e-paper driver (SPI load per controller,
+# refresh, and how long BUSY stays low) to pinpoint where a partial update
+# stalls. Only raises the driver's own logger; the rest of the app stays INFO.
+EPD_DEBUG = False
+if EPD_DEBUG:
+    logging.getLogger("waveshare_epd").setLevel(logging.DEBUG)
+
+# --- PANEL RE-INIT STRATEGY ---
+# The single-core Pi Zero 1 latches the panel BUSY line after the first partial
+# update, so it needs a hardware reset (init_Part) before every frame. Faster
+# multi-core boards (Zero 2 W, Pi 3/4/5) do not have this issue, so we skip the
+# extra re-init there to avoid needless latency and ghosting. Detected by core
+# count: Zero 1 = 1 core, everything newer = 4+.
+PANEL_REINIT_EACH_FRAME = (os.cpu_count() or 1) < 2
 
 icon_cache = {}
 global_printer = None
@@ -201,6 +235,7 @@ class DataStore:
         self.spotify = {'status': 'PAUSED', 'text': '', 'cover': None}
         self.claude = {'error': False, 'five_hour': {}, 'seven_day': {}}
         self.antigravity = {'error': False, 'models': []}
+        self.codex = {'error': False, 'five_hour': {}, 'seven_day': {}}
         self.roborock = {
             'status': 'OFFLINE', 'battery': 0, 'is_cleaning': False,
             'current_area': 0.0, 'ref_area': 0.0, 'pct': 0.0, 'last_date': '-'
@@ -212,7 +247,7 @@ class DataStore:
         self.last_update = {
             'weather': 0, 'strava': 0, 'printer': 0, 'gmail': 0,
             'spotify': 0, 'crypto': 0, 'sysload': 0, 'ping': 0,
-            'claude': 0, 'antigravity': 0
+            'claude': 0, 'antigravity': 0, 'codex': 0
         }
 
 
@@ -282,6 +317,20 @@ def auth_claude():
     except ImportError:
         print("claude.py not found. Claude widget disabled.")
         ENABLE_CLAUDE = False
+
+
+def auth_codex():
+    global ENABLE_CODEX
+    if not ENABLE_CODEX: return
+    # codex.py has no interactive login; it just needs a valid auth.json that
+    # the user provides. Disable the widget if either file is missing.
+    if not os.path.exists(os.path.join(BASE_DIR, 'codex.py')):
+        print("codex.py not found. Codex widget disabled.")
+        ENABLE_CODEX = False
+        return
+    if not os.path.exists(os.path.join(BASE_DIR, 'auth.json')):
+        print("auth.json not found. Codex widget disabled.")
+        ENABLE_CODEX = False
 
 
 def auth_antigravity():
@@ -686,6 +735,34 @@ def update_data_thread():
                     data_store.claude['error'] = True
             data_store.last_update['claude'] = now
 
+        # Codex Data Fetching (Run external script every 10 min)
+        if ENABLE_CODEX and now - data_store.last_update['codex'] > 600:
+            try:
+                subprocess.run([sys.executable, os.path.join(BASE_DIR, 'codex.py'), '--once'],
+                               capture_output=True, timeout=30)
+                usage_path = os.path.join(BASE_DIR, 'codex_usage.json')
+                if os.path.exists(usage_path):
+                    with open(usage_path, 'r') as f:
+                        usage_data = json.load(f)
+                    with data_store.lock:
+                        data_store.codex = usage_data
+                        # codex.py signals failure with utilization = -1.0 (not an
+                        # "error" key like claude.py), so check both.
+                        sd = usage_data.get('seven_day', {})
+                        if usage_data.get('error') or 'seven_day' not in usage_data \
+                                or sd.get('utilization', -1) < 0:
+                            data_store.codex['error'] = True
+                        else:
+                            data_store.codex['error'] = False
+                else:
+                    with data_store.lock:
+                        data_store.codex['error'] = True
+            except Exception as e:
+                logging.error(f"Codex update error: {e}")
+                with data_store.lock:
+                    data_store.codex['error'] = True
+            data_store.last_update['codex'] = now
+
         if ENABLE_ANTIGRAVITY and now - data_store.last_update['antigravity'] > 60:
             try:
                 subprocess.run([sys.executable, os.path.join(BASE_DIR, 'antigravity.py')], capture_output=True, timeout=30)
@@ -809,6 +886,7 @@ def render_screen(epd, fonts):
         spotify = data_store.spotify.copy()
         claude = data_store.claude.copy()
         antigravity = data_store.antigravity.copy()
+        codex = data_store.codex.copy()
         sysload = data_store.sysload.copy()
         crypto = data_store.crypto.copy()
         ping = data_store.ping.copy()
@@ -913,6 +991,25 @@ def render_screen(epd, fonts):
                     if fill_w > 0: draw.rectangle((bx + 2, y_off + 27, bx + 2 + fill_w, y_off + 25 + bh - 2), fill=0)
                     
                     y_off += 50
+    elif ENABLE_CODEX:
+        draw_icon(draw, col1_x, y3, "icon_cpu", (50, 50))
+        draw.text((col1_x + 60, y3), "CODEX AI USAGE", font=fonts['28'], fill=0)
+
+        if codex.get('error'):
+            draw.text((col1_x + 60, y3 + 40), "Codex Usage Error", font=fonts['20'], fill=0)
+        else:
+            # 7-Day limit only: OpenAI has disabled the 5-hour window for now.
+            pct_7d = codex.get('seven_day', {}).get('utilization', 0)
+            resets_7d = codex.get('seven_day', {}).get('resets_at')
+            rem_7d = time_until(resets_7d)
+
+            draw.text((col1_x + 60, y3 + 40), f"7-Day Limit: {round(pct_7d)}% (In {rem_7d})",
+                      font=fonts['20'], fill=0)
+            bx, bw, bh = col1_x + 60, 330, 15
+            draw.rectangle((bx, y3 + 70, bx + bw, y3 + 70 + bh), outline=0, width=2)
+            fill_w = int((bw - 4) * min(pct_7d / 100.0, 1.0))
+            if fill_w > 0:
+                draw.rectangle((bx + 2, y3 + 72, bx + 2 + fill_w, y3 + 70 + bh - 2), fill=0)
     else:
         draw_icon(draw, col1_x, y3, "icon_wifi", (50, 50))
         draw.text((col1_x + 60, y3), f"Internet Quality: {ping['current']} ms", font=fonts['28'], fill=0)
@@ -1149,6 +1246,7 @@ def main():
     auth_strava()
     auth_claude()
     auth_antigravity()
+    auth_codex()
     roborock_user_data = auth_roborock(ROBOROCK_CONF['EMAIL'])
 
     signal.signal(signal.SIGALRM, timeout_handler)
@@ -1190,23 +1288,35 @@ def main():
         while True:
             start_time = time.time()
             try:
-                signal.alarm(20)
+                # CPU-bound rendering runs OUTSIDE the hardware watchdog: on a
+                # Pi Zero 1 it can be slow, but it never hangs, so a slow render
+                # must not trigger a reboot and throw away the frame.
                 image = render_screen(epd, fonts)
                 buf = epd.getbuffer(image)
 
                 if refresh_counter >= 600:
                     logging.info("Full Refresh cycle")
+                    signal.alarm(90)  # full refresh flashes the whole panel, it is slow
                     epd.init()
                     epd.display(buf)
                     time.sleep(2)
                     epd.init_Part()
+                    signal.alarm(0)
                     refresh_counter = 0
                 else:
-                    logging.info("Partial Refresh")
+                    logging.debug("Partial Refresh")
+                    signal.alarm(30)  # watchdog guards only the SPI/BUSY transfer
+                    # On the Pi Zero 1 the panel reliably completes only the
+                    # FIRST partial after an init: afterwards the controller
+                    # latches BUSY low forever. init_Part() does a hardware reset
+                    # (RST pin) that pulls it out of that state, so re-arm before
+                    # every frame. Skipped on faster boards (see the flag above).
+                    if PANEL_REINIT_EACH_FRAME:
+                        epd.init_Part()
                     epd.display_Partial(buf, 0, 0, epd.width, epd.height)
+                    signal.alarm(0)
                     refresh_counter += 1
 
-                signal.alarm(0)
                 del image
                 del buf
                 if refresh_counter % 10 == 0: gc.collect()
