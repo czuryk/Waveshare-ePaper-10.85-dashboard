@@ -38,13 +38,20 @@ Update your system and install necessary system-level dependencies, including `t
 
 ### 2. Python Dependencies
 Install the required standard Python packages:
-`pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock`
+```shell
+`pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock paho-mqtt gpiozero lgpio spidev`
+```
 
-*Note: `bambulabs_api` library already included in this package.*
+**Notes:**
+The `bambulabs_api` library is already bundled in this package (in lib/), but its dependency paho-mqtt is not — it is included in the command above.
+On Raspberry Pi OS (Bookworm) the GPIO/SPI packages are best installed via apt (a system-managed Python may reject pip for these). If pip3 complains about an "externally-managed-environment", install them with:
+```shell
+sudo apt install -y python3-gpiozero python3-lgpio python3-spidev`
+```
 
 ### 3. Display Library
 The **patched** version of the epd10in85 library with fixed partial refresh issue already included in this package.
-**New** Included support of Raspberry PI Zero 1
+**(New)** Included support of Raspberry PI Zero 1
 
 ---
 
