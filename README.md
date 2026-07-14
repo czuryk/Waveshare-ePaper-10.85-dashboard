@@ -54,8 +54,10 @@ sudo apt install -y python3-gpiozero python3-lgpio python3-spidev
 ```
 
 ### 3. Display Library
-- The **patched** version of the epd10in85 library with fixed partial refresh issue already included in this package.
-- **(New)** Included support of Raspberry PI Zero 1.
+
+* The **patched** version of the epd10in85 library with fixed partial refresh issue already included in this package.
+
+* **(New)** Included support of Raspberry PI Zero 1.
 
 ---
 
