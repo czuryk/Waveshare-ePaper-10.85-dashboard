@@ -50,7 +50,7 @@ pip3 install requests Pillow google-api-python-client google-auth-httplib2 googl
 The `bambulabs_api` library is already bundled in this package (in lib/), but its dependency paho-mqtt is not — it is included in the command above.
 On Raspberry Pi OS (Bookworm) the GPIO/SPI packages are best installed via apt (a system-managed Python may reject pip for these). If pip3 complains about an "externally-managed-environment", install them with:
 ```shell
-sudo apt install -y python3-gpiozero python3-lgpio python3-spidev`
+sudo apt install -y python3-gpiozero python3-lgpio python3-spidev
 ```
 
 ### 3. Display Library
@@ -119,16 +119,22 @@ Since the official Spotify API requires running a local web server for complex t
 To ensure the dashboard continues running even after you close your SSH connection, use `tmux`.
 
 1. Start a new tmux session:
-`tmux new -s dashboard`
+```shell
+tmux new -s dashboard
+```
 
 2. Run the script inside the tmux session:
-`python3 main.py`
+```shell
+python3 main.py
+```
 
 3. Detach from the session (leave it running in the background) by pressing:
 `Ctrl+B`, then release and press `D`.
 
 To reattach to the session later and view the logs or stop the script:
-`tmux attach -t dashboard`
+```shell
+tmux attach -t dashboard
+```
 
 ## How It Works
 
