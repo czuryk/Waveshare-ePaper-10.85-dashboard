@@ -29,6 +29,8 @@
 
 
 import logging
+import time
+from PIL import Image
 from . import epdconfig
 
 # Display resolution
@@ -113,16 +115,29 @@ class EPD:
         epdconfig.spi_writebyte2_S(data)
         epdconfig.digital_write(self.cs_s_pin, 1)
         
-    def ReadBusy(self):
-        logger.debug("e-Paper busy")
+    def ReadBusy(self, timeout_s=40):
+        # Safety net: never block forever if BUSY never releases. Better to
+        # continue (and maybe show one imperfect frame) than to hang the whole
+        # process. Partial updates pass a short timeout; full refresh / init
+        # legitimately take ~15-20s and use the long default.
+        start = time.time()
+        deadline = start + timeout_s
+        polls = 0
+        logger.debug("ReadBusy: waiting for BUSY release (timeout=%ss)", timeout_s)
         while(epdconfig.digital_read(self.busy_pin) == 0):      #  0: busy, 1: idle
-            epdconfig.delay_ms(200)
-        logger.debug("e-Paper busy release")
+            epdconfig.delay_ms(100)
+            polls += 1
+            if time.time() > deadline:
+                logger.warning("ReadBusy: BUSY still LOW after %ss (%d polls) -> TIMEOUT, continuing",
+                               timeout_s, polls)
+                return False
+        logger.debug("ReadBusy: released after %.2fs (%d polls)", time.time() - start, polls)
+        return True
 
-    def TurnOnDisplay(self):
+    def TurnOnDisplay(self, timeout_s=40):
         self.send_command_ALL(0x12)
-        epdconfig.delay_ms(100)	        # The delay here is necessary, 200uS at least!!!     
-        self.ReadBusy()                 # waiting for the electronic paper IC to release the idle signal
+        epdconfig.delay_ms(100)	        # The delay here is necessary, 200uS at least!!!
+        return self.ReadBusy(timeout_s) # waiting for the electronic paper IC to release the idle signal
 
     def init(self):
         if (epdconfig.module_init() != 0):
@@ -358,28 +373,24 @@ class EPD:
         return 0
 
     def getbuffer(self, image):
-        # logger.debug("bufsiz = ",int(self.width/8) * self.height)
-        buf = [0xFF] * (int(self.width / 8) * self.height)
-        image_monocolor = image.convert('1')
-        imwidth, imheight = image_monocolor.size
-        pixels = image_monocolor.load()
-        # logger.debug("imwidth = %d, imheight = %d",imwidth,imheight)
+        # Fast path: a PIL image in mode '1' already stores its pixels as
+        # packed, MSB-first bits (1 = white, 0 = black), which is exactly the
+        # panel's buffer format. image.tobytes() does the packing in C, so it
+        # replaces a ~650k-iteration Python loop that is far too slow on a
+        # Pi Zero 1 (that loop is what tripped the hardware watchdog).
+        if image.mode != '1':
+            image = image.convert('1')
+        imwidth, imheight = image.size
         if imwidth == self.width and imheight == self.height:
-            logger.debug("Horizontal")
-            for y in range(imheight):
-                for x in range(imwidth):
-                    # Set the bits for the column of pixels at the current position.
-                    if pixels[x, y] == 0:
-                        buf[int((x + y * self.width) / 8)] &= ~(0x80 >> (x % 8))
+            return bytearray(image.tobytes())
         elif imwidth == self.height and imheight == self.width:
-            logger.debug("Vertical")
-            for y in range(imheight):
-                for x in range(imwidth):
-                    newx = y
-                    newy = self.height - x - 1
-                    if pixels[x, y] == 0:
-                        buf[int((newx + newy * self.width) / 8)] &= ~(0x80 >> (y % 8))
-        return buf
+            # Portrait image: rotate it into the panel's landscape orientation.
+            return bytearray(image.rotate(90, expand=True).tobytes())
+        else:
+            # Fallback: paste onto a correctly sized white frame.
+            frame = Image.new('1', (self.width, self.height), 255)
+            frame.paste(image, (0, 0))
+            return bytearray(frame.tobytes())
 
     def Clear(self):
         self.send_command_M(0x10)
@@ -731,6 +742,9 @@ class EPD:
             # Assuming input Image is exactly size of window requested.
             raise ValueError(f"Buffer mismatch: expected {expected}, got {len(Image)}")
 
+        logger.debug("display_Partial: window x[%d..%d] y[%d..%d] = %dx%dpx, %d bytes, mid=%d",
+                     Xs, Xe, Ys, Ye, win_w_px, win_h, expected, mid)
+
         # --- Helper: Load data into controller RAM (0x13 New Data) ---
         # Does NOT trigger refresh yet.
         def _load_data_M(buf, x_px, y_px, w_px, h_px):
@@ -793,7 +807,7 @@ class EPD:
         # ==========================================
         if Xe <= mid:
             _load_data_M(Image, Xs, Ys, win_w_px, win_h)
-            self.TurnOnDisplay()
+            self.TurnOnDisplay(timeout_s=12)
             _update_old_M(Image)
             return
 
@@ -802,7 +816,7 @@ class EPD:
         # ==========================================
         if Xs >= mid:
             _load_data_S(Image, Xs - mid, Ys, win_w_px, win_h)
-            self.TurnOnDisplay()
+            self.TurnOnDisplay(timeout_s=12)
             _update_old_S(Image)
             return
 
@@ -830,15 +844,26 @@ class EPD:
             right_buf[row * right_w_bytes: (row + 1) * right_w_bytes] = Image[r0:r1]
 
         # 2. Load Data to BOTH controllers
+        logger.debug("display_Partial[BOTH]: loading M (%d bytes)...", len(left_buf))
+        t = time.time()
         _load_data_M(left_buf, Xs, Ys, left_w_px, win_h)
+        logger.debug("display_Partial[BOTH]: M loaded in %.2fs; loading S (%d bytes)...",
+                     time.time() - t, len(right_buf))
+        t = time.time()
         _load_data_S(right_buf, 0, Ys, right_w_px, win_h)  # Slave starts at x=0
+        logger.debug("display_Partial[BOTH]: S loaded in %.2fs; refreshing...", time.time() - t)
 
         # 3. Simultaneous Refresh
-        self.TurnOnDisplay()
+        t = time.time()
+        ok = self.TurnOnDisplay(timeout_s=12)
+        logger.debug("display_Partial[BOTH]: refresh returned %s in %.2fs; writing old-data...",
+                     ok, time.time() - t)
 
         # 4. Update "Old Data" memory for next partial update
+        t = time.time()
         _update_old_M(left_buf)
         _update_old_S(right_buf)
+        logger.debug("display_Partial[BOTH]: old-data written in %.2fs", time.time() - t)
 
 # ----------------------------------------
 
