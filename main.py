@@ -1254,8 +1254,14 @@ def main():
 
     try:
         epd = epd10in85.EPD()
+        # Panel setup runs before the render loop, so it is not covered by the
+        # per-frame watchdog below. ReadBusy() has no timeout, so a panel that
+        # never releases BUSY (unplugged, half-seated, wedged) blocks here
+        # forever with no error anywhere. Arm the watchdog so it fails instead.
+        signal.alarm(120)
         epd.init()
         epd.Clear()
+        signal.alarm(0)
         time.sleep(1)
         epd.init_Part()
 

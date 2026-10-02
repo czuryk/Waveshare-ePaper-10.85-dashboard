@@ -43,7 +43,7 @@ sudo apt install python3-pip python3-pil python3-numpy git tmux -y
 ### 2. Python Dependencies
 Install the required standard Python packages:
 ```shell
-pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt roborock paho-mqtt gpiozero lgpio spidev
+pip3 install requests Pillow google-api-python-client google-auth-httplib2 google-auth-oauthlib aiomqtt python-roborock paho-mqtt gpiozero lgpio spidev
 ```
 
 **Notes:**

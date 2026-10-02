@@ -169,6 +169,111 @@ class RaspberryPi:
 
 
 
+class OrangePi:
+    """Orange Pi backend built on libgpiod v2 + spidev.
+
+    RPi.GPIO/gpiozero are Broadcom-specific and will not drive an Allwinner
+    board, so this talks to /dev/gpiochip directly. Line numbers are
+    board-specific: the values below are for the Orange Pi Zero 2W, whose
+    40-pin header carries the same *physical* pin positions as a Pi but wires
+    them to different SoC lines. They follow the vendor pin table
+    (port base + offset, PH=224, PI=256) and were verified against hardware:
+
+        physical 11 -> PH2  RST      physical 24 -> PH5  CS_M
+        physical 12 -> PI1  PWR      physical 26 -> PH9  CS_S
+        physical 18 -> PH4  BUSY
+        physical 22 -> PI6  DC
+
+    On another Orange Pi model, re-derive these from that board's pin table.
+    """
+
+    RST_PIN     = 226
+    DC_PIN      = 262
+    BUSY_PIN    = 228
+    PWR_PIN     = 257
+    # Chip selects are asserted by the SPI controller; the driver only reads
+    # these attributes, it never drives them as GPIO.
+    CS_M_PIN    = 229
+    CS_S_PIN    = 233
+    GPIOCHIP    = '/dev/gpiochip1'
+    SPI_BUS     = 1
+
+    def __init__(self):
+        import spidev
+        import gpiod
+        from gpiod.line import Direction, Value
+
+        self._Value = Value
+        self.SPI_M = spidev.SpiDev()
+        self.SPI_S = spidev.SpiDev()
+
+        self._req = gpiod.request_lines(
+            self.GPIOCHIP,
+            consumer='epd10in85',
+            config={
+                self.RST_PIN: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.INACTIVE),
+                self.DC_PIN: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.INACTIVE),
+                self.PWR_PIN: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=Value.INACTIVE),
+                self.BUSY_PIN: gpiod.LineSettings(direction=Direction.INPUT),
+            },
+        )
+        self._spi_opened = False
+
+    def digital_write(self, pin, value):
+        if pin in (self.RST_PIN, self.DC_PIN, self.PWR_PIN):
+            self._req.set_value(pin, self._Value.ACTIVE if value else self._Value.INACTIVE)
+
+    def digital_read(self, pin):
+        if pin == self.BUSY_PIN:
+            return 1 if self._req.get_value(pin) == self._Value.ACTIVE else 0
+        return 0
+
+    def delay_ms(self, delaytime):
+        time.sleep(delaytime / 1000.0)
+
+    def spi_writebyte_M(self, data):
+        self.SPI_M.writebytes(data)
+
+    def spi_writebyte2_M(self, data):
+        self.SPI_M.writebytes2(data)
+
+    def spi_writebyte_S(self, data):
+        self.SPI_S.writebytes(data)
+
+    def spi_writebyte2_S(self, data):
+        self.SPI_S.writebytes2(data)
+
+    def module_init(self, cleanup=False):
+        self.digital_write(self.PWR_PIN, 1)
+
+        if not self._spi_opened:
+            self.SPI_M.open(self.SPI_BUS, 0)
+            self.SPI_M.max_speed_hz = 4000000
+            self.SPI_M.mode = 0b00
+
+            self.SPI_S.open(self.SPI_BUS, 1)
+            self.SPI_S.max_speed_hz = 4000000
+            self.SPI_S.mode = 0b00
+
+            self._spi_opened = True
+
+        return 0
+
+    def module_exit(self, cleanup=False):
+        logger.debug("spi end")
+        self.SPI_M.close()
+        self.SPI_S.close()
+        self._spi_opened = False
+
+        self.digital_write(self.RST_PIN, 0)
+        self.digital_write(self.DC_PIN, 0)
+        self.digital_write(self.PWR_PIN, 0)
+        logger.debug("close 5V, Module enters 0 power consumption ...")
+
+        if cleanup:
+            self._req.release()
+
+
 class JetsonNano:
     # Pin definition
     RST_PIN  = 17
@@ -313,12 +418,29 @@ output, _ = process.communicate()
 if sys.version_info[0] == 2:
     output = output.decode(sys.stdout.encoding)
 
+try:
+    with open('/proc/device-tree/model', 'rb') as f:
+        model = f.read().decode(errors='ignore')
+except OSError:
+    model = ''
+
 if "Raspberry" in output:
     implementation = RaspberryPi()
+elif "OrangePi" in model or "Orange Pi" in model:
+    implementation = OrangePi()
 elif os.path.exists('/sys/bus/platform/drivers/gpio-x3'):
     implementation = SunriseX3()
 else:
-    implementation = JetsonNano()
+    # Unchanged fallback, but an unrecognised board previously died with a bare
+    # "No module named 'Jetson'", which gives no hint that board detection is
+    # what actually failed.
+    try:
+        implementation = JetsonNano()
+    except ImportError as e:
+        raise RuntimeError(
+            f"Unsupported board (device-tree model: {model.strip() or 'unknown'}). "
+            f"Detection fell through to the Jetson backend, which is unavailable: {e}"
+        )
 
 for func in [x for x in dir(implementation) if not x.startswith('_')]:
     setattr(sys.modules[__name__], func, getattr(implementation, func))
